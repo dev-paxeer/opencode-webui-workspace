@@ -124,11 +124,19 @@ NGINXCONF
 # Create entrypoint script
 COPY <<ENTRYEOF /entrypoint.sh
 #!/bin/bash
-set -e
 
-echo "Starting opencode..."
-opencode web --port 4096 --hostname 127.0.0.1 &
+echo "=== Starting opencode ==="
+echo "PATH: $PATH"
+echo "which opencode: $(which opencode 2>&1)"
+echo "opencode version: $(opencode --version 2>&1)"
+echo "Working dir: $(pwd)"
+echo "Home dir contents:"
+ls -la /home/opencode/
+
+# Run opencode and capture all output
+opencode web --port 4096 --hostname 127.0.0.1 --print-logs 2>&1 &
 OPENCODE_PID=$!
+echo "opencode PID: $OPENCODE_PID"
 
 # Wait up to 60 seconds for opencode to respond
 echo "Waiting for opencode to be ready..."
@@ -138,7 +146,10 @@ for i in $(seq 1 60); do
         break
     fi
     if ! kill -0 $OPENCODE_PID 2>/dev/null; then
-        echo "ERROR: opencode process died!"
+        echo "ERROR: opencode process died! Exit code: $?"
+        echo "=== Last opencode logs ==="
+        wait $OPENCODE_PID
+        echo "Exit status: $?"
         exit 1
     fi
     echo "  ...waiting (${i}/60)"
@@ -153,9 +164,6 @@ RUN chmod +x /entrypoint.sh
 
 # Set proper permissions for workspace
 RUN chown -R opencode:opencode /home/opencode/workspace
-
-# NOTE: Running as root so nginx can bind to port 8080
-# opencode itself still writes to /home/opencode
 
 EXPOSE 8080
 
