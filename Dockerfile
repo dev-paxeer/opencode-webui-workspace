@@ -99,8 +99,8 @@ RUN echo "=== Python ===" && python3 --version && \
     echo "=== Rclone ===" && rclone version
 
 # Configure nginx as a CSP-fixing reverse proxy for opencode
-RUN rm -f /etc/nginx/sites-enabled/default && \
-    cat > /etc/nginx/conf.d/opencode.conf << 'NGINXCONF'
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY <<NGINXCONF /etc/nginx/conf.d/opencode.conf
 server {
     listen 8080;
 
@@ -110,7 +110,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
         proxy_read_timeout 86400;
+        proxy_intercept_errors off;
 
         proxy_hide_header Content-Security-Policy;
         add_header Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval'; default-src 'self'; connect-src 'self' wss: ws:; img-src 'self' data:; style-src 'self' 'unsafe-inline';" always;
@@ -119,27 +122,33 @@ server {
 NGINXCONF
 
 # Create entrypoint script
-RUN cat > /entrypoint.sh << 'EOF'
+COPY <<ENTRYEOF /entrypoint.sh
 #!/bin/bash
 set -e
 
-# Start opencode web server in background (bound to localhost only)
+echo "Starting opencode..."
 opencode web --port 4096 --hostname 127.0.0.1 &
+OPENCODE_PID=$!
 
-# Wait for opencode to be ready
-echo "Waiting for opencode to start..."
-for i in $(seq 1 30); do
+# Wait up to 60 seconds for opencode to respond
+echo "Waiting for opencode to be ready..."
+for i in $(seq 1 60); do
     if curl -sf http://127.0.0.1:4096 > /dev/null 2>&1; then
-        echo "OpenCode is ready."
+        echo "OpenCode ready after ${i}s"
         break
     fi
+    if ! kill -0 $OPENCODE_PID 2>/dev/null; then
+        echo "ERROR: opencode process died!"
+        exit 1
+    fi
+    echo "  ...waiting (${i}/60)"
     sleep 1
 done
 
-# Start nginx in foreground
 echo "Starting nginx..."
-nginx -g "daemon off;"
-EOF
+exec nginx -g "daemon off;"
+ENTRYEOF
+
 RUN chmod +x /entrypoint.sh
 
 # Set proper permissions for workspace
