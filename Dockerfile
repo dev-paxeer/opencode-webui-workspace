@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base dependencies and tools
+# Install base dependencies and tools (including nginx)
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     curl \
@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     openssh-client \
     rclone \
     magic-wormhole \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Add deadsnakes PPA for Python 3.13
@@ -97,12 +98,57 @@ RUN echo "=== Python ===" && python3 --version && \
     echo "=== OpenCode ===" && opencode --version && \
     echo "=== Rclone ===" && rclone version
 
+# Configure nginx as a CSP-fixing reverse proxy for opencode
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    cat > /etc/nginx/conf.d/opencode.conf << 'NGINXCONF'
+server {
+    listen 8080;
+
+    location / {
+        proxy_pass http://127.0.0.1:4096;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+
+        proxy_hide_header Content-Security-Policy;
+        add_header Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval'; default-src 'self'; connect-src 'self' wss: ws:; img-src 'self' data:; style-src 'self' 'unsafe-inline';" always;
+    }
+}
+NGINXCONF
+
+# Create entrypoint script
+RUN cat > /entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Start opencode web server in background (bound to localhost only)
+opencode web --port 4096 --hostname 127.0.0.1 &
+
+# Wait for opencode to be ready
+echo "Waiting for opencode to start..."
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:4096 > /dev/null 2>&1; then
+        echo "OpenCode is ready."
+        break
+    fi
+    sleep 1
+done
+
+# Start nginx in foreground
+echo "Starting nginx..."
+nginx -g "daemon off;"
+EOF
+RUN chmod +x /entrypoint.sh
+
 # Set proper permissions for workspace
 RUN chown -R opencode:opencode /home/opencode/workspace
 
-# Switch to opencode user
-USER opencode
+# NOTE: Running as root so nginx can bind to port 8080
+# opencode itself still writes to /home/opencode
 
-# Set entrypoint and default command
-ENTRYPOINT ["opencode"]
-CMD ["web", "--port", "4096", "--hostname", "0.0.0.0"]
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
