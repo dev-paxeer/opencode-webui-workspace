@@ -98,6 +98,10 @@ RUN echo "=== Python ===" && python3 --version && \
     echo "=== OpenCode ===" && opencode --version && \
     echo "=== Rclone ===" && rclone version
 
+# Fake xdg-open so opencode web doesn't crash in headless container
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/xdg-open && \
+    chmod +x /usr/local/bin/xdg-open
+
 # Configure nginx as a CSP-fixing reverse proxy for opencode
 RUN rm -f /etc/nginx/sites-enabled/default
 COPY <<NGINXCONF /etc/nginx/conf.d/opencode.conf
@@ -126,17 +130,8 @@ COPY <<ENTRYEOF /entrypoint.sh
 #!/bin/bash
 
 echo "=== Starting opencode ==="
-echo "PATH: $PATH"
-echo "which opencode: $(which opencode 2>&1)"
-echo "opencode version: $(opencode --version 2>&1)"
-echo "Working dir: $(pwd)"
-echo "Home dir contents:"
-ls -la /home/opencode/
-
-# Run opencode and capture all output
 opencode web --port 4096 --hostname 127.0.0.1 --print-logs 2>&1 &
 OPENCODE_PID=$!
-echo "opencode PID: $OPENCODE_PID"
 
 # Wait up to 60 seconds for opencode to respond
 echo "Waiting for opencode to be ready..."
@@ -146,8 +141,7 @@ for i in $(seq 1 60); do
         break
     fi
     if ! kill -0 $OPENCODE_PID 2>/dev/null; then
-        echo "ERROR: opencode process died! Exit code: $?"
-        echo "=== Last opencode logs ==="
+        echo "ERROR: opencode process died!"
         wait $OPENCODE_PID
         echo "Exit status: $?"
         exit 1
